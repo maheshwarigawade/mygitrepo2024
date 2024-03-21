@@ -1,0 +1,1097 @@
+#!/usr/bin/env groovy
+
+/*----------------------------------------------------------------------*/
+/*      Script name           	:       Common-Jenkins-Script   		*/
+/*      Creation Date   		:       24th Oct-2019           		*/
+/*      Last Update             :       01st-Oct-2020            		*/
+/*      Created by              :       Satish Kumar             		*/
+/*      Email                   :       satish.kumar26@vodafone.com     */
+/*----------------------------------------------------------------------*/
+
+
+/* Update your email addressess below to get the Job status notification. */
+
+/*----------Global Variables begin-----------*/
+import java.util.regex.*
+
+def COMMIT_USER1
+def ENV
+def ENV_NAME
+def pre_deployment_err_perc = "Not Initiated"
+def post_deployment_err_perc = "Not Initiated"
+def pre_deployment_test_result_var = "NULL"
+def post_deployment_test_result_var = "NULL"
+def MS_DEPLOYMENT_NAME
+def AGENT_LABEL = null
+def jmeter_file_data = "NULL"
+def commitMessage
+def commitId
+
+
+
+def EMAIL_LIST = "DL-VSSI-TCOps@internal.vodafone.com"
+//def EMAIL_LIST = "satish.kumar26@vodafone.com,arpit.kumar1@vodafone.com,Ankit.Agarwal@vodafone.com,Kissan.Das@Vodafone.com,Kashika.Sharma@Vodafone.com,jyoti.narayanmehra@vodafone.com,gagandeep.attri@vodafone.com"
+//def EMAIL_LIST = "satish.kumar26@vodafone.com"
+
+
+ENV = 'null'
+/*----------Global Variables End-----------*/
+
+pipeline {
+                environment {
+
+                        MIN_HPA = 1
+                                        }
+    options {        buildDiscarder(logRotator(numToKeepStr: '40', artifactNumToKeepStr: '40'))
+                        }
+
+    agent { label "docker" }
+
+    stages {
+
+/*----------Verification Stage begins-----------*/
+                 stage('Verification') {
+                                steps{
+
+                                        script {
+
+                                                try {
+
+                                                sh label: '', script: 'date'
+												echo "GITHUB_ORGANIZATION_NAME=$GITHUB_ORGANIZATION_NAME"
+                                                echo "REPO_NAME=$REPO_NAME"
+                                                echo "BRANCH_NAME=$MY_BRANCH_NAME"
+                                                echo "WORKSPACE=$WORKSPACE"
+												echo "EXECUTE_PRE_DEPLOYMENT_TEST=$EXECUTE_PRE_DEPLOYMENT_TEST"
+												echo "EXECUTE_POST_DEPLOYMENT_TEST=$EXECUTE_POST_DEPLOYMENT_TEST"
+												echo "JMETER_SCRIPT_NAME=$JMETER_SCRIPT_NAME"
+                                                //echo "BUILD_USER=$BUILD_USER"
+                                                //echo "BUILD_USER_ID=$BUILD_USER_ID"
+												sh label: '', script: 'ls -lrt'
+
+												if ("$GITHUB_ORGANIZATION_NAME" == 'VFCPS-DC-DE')
+													{	AGENT_LABEL = "jmeter"	} 
+												else if ("$GITHUB_ORGANIZATION_NAME" == 'VFCPS-GlobalIntegrationGateway')
+													{	AGENT_LABEL = "jmeter"	}
+												else 
+													{ 	AGENT_LABEL = "docker" 	}
+																						
+												
+	 
+                                                echo "#######################################################"
+
+
+                                                checkout changelog: false, poll: false, scm: [$class: 'GitSCM', branches: [[name: 'refs/heads/$MY_BRANCH_NAME']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: "$GITHUB_CREDENTIAL_ID", url: 'https://github.vodafone.com/$GITHUB_ORGANIZATION_NAME/$REPO_NAME']]]
+
+                                                sh label: '', script: 'pwd'
+                                                sh label: '', script: 'ls -lrt'
+
+                                                sh """
+
+                                                ls -lrt $WORKSPACE
+												 
+												 
+                                                >$WORKSPACE/image_name
+                                                >$WORKSPACE/commit_details.txt
+                                                >$WORKSPACE/yaml_file_list.txt
+                                                >$WORKSPACE/yaml_file_list_tmp.txt
+                                                >$WORKSPACE/xml_files_list.txt
+                                                >$WORKSPACE/env_name
+                                                >$WORKSPACE/deployment_name
+												>$WORKSPACE/directory_list.txt
+												
+												
+                                                echo "===================================== Verification stage =========================================="
+                                                echo "MY_BRANCH_NAME=$MY_BRANCH_NAME"
+
+                                                BR_LATEST_COMMIT=`git log | sed -n '1p' | cut -d' ' -f2| tr -d ' '`
+                                                echo "BR_LATEST_COMMIT=\$BR_LATEST_COMMIT"
+                                                git show "\$BR_LATEST_COMMIT" >$WORKSPACE/commit_details.txt
+
+                                                printf "\n-----------------COMMIT DATA----------------\n\n"
+                                                cat $WORKSPACE/commit_details.txt
+
+
+												for ln in `cat $WORKSPACE/commit_details.txt | grep "^+++" | grep -v "/dev/null"`
+												do
+												echo "\$ln" | awk -F"/" '{for(i=1;i<=NF-1;i++){printf \$i"/"}}' >> $WORKSPACE/directory_list.txt
+												printf "\n" >> $WORKSPACE/directory_list.txt
+												done
+												
+												echo "-----before-----"
+												cat $WORKSPACE/directory_list.txt | uniq
+												sed -i '/^\$/d' $WORKSPACE/directory_list.txt
+												echo "-----after-----"
+												cat $WORKSPACE/directory_list.txt | uniq
+												
+												DIR_COUNT=`cat $WORKSPACE/directory_list.txt | uniq | wc -l | tr -d " " | sed -e 's/\r//g'`
+												echo "DIR_COUNT=\$DIR_COUNT"
+												
+												
+												if [ -z "\$DIR_COUNT" ]
+												then 
+													    printf "\n\n\nERROR:Not able to fetch the value for DIRECTORY_COUNT.Please check the issue.Going to exit now."
+                                                        exit 1
+
+												elif [ "\$DIR_COUNT" -gt 1 ]
+												then
+														printf "\n\n\nERROR:More than 1 directory locations found for the changes.Please commit the files for a SINGLE Microservice in a SINGLE folder location in the branch to avoid any conflicts.Below are "\$DIR_COUNT" directories:"
+														
+														echo "-----------------------------------------------------"
+														cat $WORKSPACE/directory_list.txt | cut -c 2-\$NF | cat -n
+														echo "-----------------------------------------------------"
+														
+														echo "Going to exit now."
+														exit 1
+												else
+														echo "Changes has been made in below directory:"
+														echo "-----------------------------------------------------"
+														cat $WORKSPACE/directory_list.txt
+														echo "-----------------------------------------------------"
+														
+												fi
+
+
+												CURRENT_DIR=`cat $WORKSPACE/commit_details.txt | grep "^+++" | grep -v "/dev/null" | sed -n '1p' | awk -F"/" '{for(i=2;i<=NF-1;i++){printf \$i"/"}}'| sed s'/.\$//'`
+
+
+                                                if [ -z \$CURRENT_DIR ]
+                                                then
+                                                CURRENT_DIR="."
+                                                fi
+                                                echo "CURRENT_DIR=\$CURRENT_DIR"
+
+                                                FILE_COUNT=`grep -i "^[[:space:]]*image:" "\$CURRENT_DIR/"* | awk -F":" '{print \$1}' | grep -i deploy | uniq | wc -l`
+                                                echo "FILE_COUNT=\$FILE_COUNT"
+                                                
+                                                if [ "\$FILE_COUNT" -gt 1 ]
+                                                then
+                                                        printf "\n\n\nERROR:More than 1 deployment files found.Please check the discrepancy.Going to exit now."
+                                                        exit 1
+                                                elif [ "\$FILE_COUNT" == 0 ]
+                                                then
+                                                        printf "\n\n\nERROR:Deployment file not found."
+                                                        exit 1
+                                                else
+                                                        echo "ONE Deployment file found."
+                                                fi
+
+                                                DEPLOYMENT_FILE_NAME=`grep -i "^[[:space:]]*image:" "\$CURRENT_DIR/"* | grep -v "^#" | head -1 | awk -F":" '{print \$1}'`
+                                                echo "DEPLOYMENT_FILE_NAME=\$DEPLOYMENT_FILE_NAME"
+
+                                                cat "\$DEPLOYMENT_FILE_NAME" | grep -i "^[[:space:]]*image:" | grep -v "^#" | head -1 | awk -F"image:" '{print \$2}' | tr -d ' ' > $WORKSPACE/image_name
+
+                                                printf "\n----------------------IMAGE NAME-----------------------------"
+
+                                                if [ -s $WORKSPACE/image_name ]
+                                                then
+                                                        echo "IMAGE FOUND."
+                                                        cat $WORKSPACE/image_name
+                                                else
+                                                        printf "\n\n\nERROR:No Image found to be deployed. Please check.Going to exit now."
+                                                        exit 1
+                                                fi
+
+                                                cat $WORKSPACE/commit_details.txt | grep "^+++" |  egrep "yaml|yml" | grep -v "/dev/null" | tr -d '^\$' > $WORKSPACE/files.txt
+                                                cat $WORKSPACE/commit_details.txt | grep "^+++" | grep "SecurityIdentities.xml" | grep -v "/dev/null" | tr -d '^\$' > $WORKSPACE/xml_files.txt
+
+
+                                                for i in `cat $WORKSPACE/files.txt`
+                                                do
+                                                        echo "\$i" | awk -F"/" '{for(i=2;i<=NF;i++){printf \$i"/"}}' | sed s'/.\$//' >>$WORKSPACE/yaml_file_list_tmp.txt
+                                                        printf "\n" >>$WORKSPACE/yaml_file_list_tmp.txt
+                                                done
+                                                sed -i '/^\$/d' $WORKSPACE/yaml_file_list_tmp.txt
+
+                                                sort $WORKSPACE/yaml_file_list_tmp.txt  > $WORKSPACE/yaml_file_list.txt
+
+
+                                                for i in `cat $WORKSPACE/xml_files.txt`
+                                                do
+                                                        echo "\$i" | awk -F"/" '{for(i=2;i<=NF;i++){printf \$i"/"}}' | sed s'/.\$//' >>$WORKSPACE/xml_files_list.txt
+                                                        printf "\n" >>$WORKSPACE/xml_files_list.txt
+                                                done
+                                                sed -i '/^\$/d' $WORKSPACE/xml_files_list.txt
+
+                                                printf "YAML File list is below:\n"
+                                                cat -n $WORKSPACE/yaml_file_list.txt
+
+                                                printf "XML File list is below:\n"
+                                                cat -n $WORKSPACE/xml_files_list.txt
+
+                                                        ENV=`grep -iE  "environment:|env:"  "\$DEPLOYMENT_FILE_NAME" | sed -n '1p' | tr -d " " | awk -F":" '{print \$2}'`
+                                                        echo "ENV=\$ENV"
+
+                                                        echo "\$ENV" >$WORKSPACE/env_name
+
+                                                        cat $WORKSPACE/commit_details.txt | grep "^+++" | grep yaml| awk -F"/" '{print \$(NF-1)"/"\$NF}' > $WORKSPACE/files.txt
+												
+                                                """
+												
+										
+										if ("$EXECUTE_PRE_DEPLOYMENT_TEST" == 'true' || "$EXECUTE_POST_DEPLOYMENT_TEST" ==  'true')
+											{												
+											
+											echo "Either pre-deployment or post-deployment test is enabled.Will check the JMX file now."
+											JMETER_INIT_PATH =  sh (script: 'find . -name "$JMETER_SCRIPT_NAME" | tr -d " "', returnStdout: true)trim()
+                                            echo "JMETER_INIT_PATH=$JMETER_INIT_PATH"
+												
+											jmeter_file_data = readFile "$JMETER_INIT_PATH"
+											//echo "jmeter_file_data=$jmeter_file_data"												
+												
+											}
+												
+												
+												
+                                                COMMIT_USER1 = sh (script: 'cat $WORKSPACE/commit_details.txt | grep "^Author: " | awk -F"Author: " \'{print $2}\' | sed -e \'s/</(/g\' | sed -e \'s/>/)/g\'', returnStdout: true )trim()
+                                                echo "COMMIT_USER1=$COMMIT_USER1"
+
+                                                IMAGE_NAME =  sh (script: 'cat $WORKSPACE/image_name', returnStdout: true)trim()
+                                                echo "IMAGE_NAME=$IMAGE_NAME"
+
+                                                if ("$IMAGE_NAME" ==~ /^(.*)\/([a-z|-]{3,40}):(ga|rc(\.([0-9]{1,3})){0,1}|dev(\.([0-9]{1,3})){0,1}|test(\.([0-9]{1,3})){0,1}){1}(-([a-z|-]{3,40}[a-z]{0,1})){0,1}-([0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3})(-([a-z0-9]{7})){0,1}$/)
+                                                        {
+                                                        echo "IMAGE IS VALID."
+                                                        }
+                                                else
+                                                        {
+                                                        //echo "IMAGE FORMAT IS NOT VALID.PLEASE CHECK.GOING TO EXIT NOW."
+
+														echo "Warning:Image format is not valid as per standard from automation team.This is just a warning and will not hamper with the deployment.Moving ahead now..."
+                                                        //sh (script: 'exit 1')
+                                                        }
+																									
+
+                                                } catch (Exception err) {
+                                                                currentBuild.result = 'FAILURE'
+                                                                throw err       }
+
+                                                }       //script
+
+                                        }       //steps
+                                }       // stage
+
+/*----------Verification Stage Ends-----------*/
+
+
+/*----------Pre deployment test Stage begins-----------*/
+        stage('PreDeploymentTest')
+        {
+
+
+    agent {label  "${AGENT_LABEL}"}
+
+
+                steps{
+                        container('jmeter')
+                                {
+                                script {
+             try {
+
+
+                             //checkout changelog: false, poll: false, scm: [$class: 'GitSCM', branches: [[name: 'refs/heads/$MY_BRANCH_NAME']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: "$GITHUB_CREDENTIAL_ID", url: 'https://github.vodafone.com/$GITHUB_ORGANIZATION_NAME/$REPO_NAME']]]
+												
+												
+                                if ("$EXECUTE_PRE_DEPLOYMENT_TEST" == 'true')
+                                {
+								
+                                 sh label: '', script: 'pwd'
+                                 sh label: '', script: 'ls -lrt'
+
+										echo "Fetching .jmx content..."
+										//echo "jmeter_file_data=$jmeter_file_data"
+										writeFile file: "$WORKSPACE/temp-jmeter-script.jmx", text: "${jmeter_file_data}"										
+										
+                                        sh """
+                                                echo "===================================== Pre-Deployment-Test stage =========================================="
+                                                echo "PRE-DEPLOYMENT TEST IS ENABLED.WILL EXECUTE TEST CASES NOW."
+                                                set -x
+
+										pwd
+										ls -lrt
+
+										JMETER_FILE_COUNT=`find . -name "temp-jmeter-script.jmx" | wc -l | tr -d ' ' | sed -e 's/\r//g'`
+
+										if [ "\$JMETER_FILE_COUNT" -eq 1 ]
+                                        then
+												printf "\nONE jmeter FILE FOUND."
+												echo "------------------------------------------"
+												find . -name "temp-jmeter-script.jmx"
+												
+												JMETER_SCRIPT_PATH=`find . -name temp-jmeter-script.jmx | tr -d ' ' | sed -e 's/\r//g'`
+												echo "------------------------------------------"
+												
+												if [ ! -s "\$JMETER_SCRIPT_PATH" ]
+                                                then
+                                                printf "\n\n\nERROR: \$JMETER_SCRIPT_NAME file is EMPTY.Going to exit now."
+												exit 1
+                                                fi
+												
+												
+												>$WORKSPACE/pre_deployment_test_result.jtl
+                                                JMETER_HOME=`which jmeter`
+
+                                                "\$JMETER_HOME" -n -t "\$JMETER_SCRIPT_PATH" -l $WORKSPACE/pre_deployment_test_result.jtl | tee -a $WORKSPACE/pre_deployment_summary.jtl
+                                                
+												echo "------------------TEST DETAILS------------------------"
+												cat $WORKSPACE/pre_deployment_test_result.jtl
+												echo "------------------------------------------"
+												
+												
+                                                cat $WORKSPACE/pre_deployment_summary.jtl | grep "summary =" | tail -1
+
+                                                cat $WORKSPACE/pre_deployment_summary.jtl | grep "summary =" | tail -1 | awk -F"Err:" '{print \$2}' | awk -F"(" '{print \$2}' | awk -F"%)" '{print \$1}' >$WORKSPACE/pre_deployment_perc
+
+                                                cat $WORKSPACE/pre_deployment_perc
+												
+												
+
+                                        elif [ "\$JMETER_FILE_COUNT" -gt 1 ]
+                                        then
+
+												printf "\n\n\nERROR:More than 1 jmeter file found of same name in the branch.Please check.Going to exit now."
+												echo "------------------------------------------"
+												find . -name $JMETER_SCRIPT_NAME
+												echo "------------------------------------------"
+												exit 1
+														
+										else
+												printf "\n\n\nERROR:$JMETER_SCRIPT_NAME file not found.Please check."
+												exit 1
+                                        fi
+														
+                                        """
+
+                                        pre_deployment_err_perc =  sh (script: "cat $WORKSPACE/pre_deployment_perc", returnStdout: true)trim()
+                                        echo "value=$pre_deployment_err_perc"
+																		
+										pre_deployment_test_result_var = readFile "$WORKSPACE/pre_deployment_test_result.jtl"
+                                        echo "pre_deployment_test_result_var=$pre_deployment_test_result_var"
+
+                                        timeout(time: 720, unit: 'SECONDS') { // change to a convenient timeout for you
+								
+								
+								input(
+								id: 'PreDeploymentCheck', message: "Error percentage is: ${pre_deployment_err_perc}%.\nDo you want to proceed with deployment?", parameters: [
+								[$class: 'BooleanParameterDefinition', defaultValue: true, description: '', name: 'Please confirm to proceed ahead.']
+								])
+								}
+
+                                
+								
+								}
+                                else
+                                {
+                                echo "PRE DEPLOYMENT TEST IS DISABLED.WILL MOVE AHEAD WITH THE DEPLOYMENT NOW."
+                                pre_deployment_err_perc = 'Not Applicable, Test skipped by user.'
+                                }
+
+
+                        } catch (Exception err) {
+                                currentBuild.result = 'FAILURE'
+                                throw err       }
+
+                                }       //script
+
+                        } //container
+                }       //steps
+        }       // stage
+
+
+/*----------Pre deployment test Stage Ends-----------*/
+
+/*----------Deployment Stage begins-----------*/
+        stage('Deployment') {
+            steps {
+                container('kubectl') {
+                                        withCredentials([file(credentialsId: "$KUBECONFIG_CRED_ID", variable: 'kubeconfig')]) {
+                    script {
+
+                        try {
+
+                                                sh """
+												
+												pwd
+												ls -lrt
+
+                                                echo "\$KUBECONFIG_CRED_ID"
+                                                cp $kubeconfig /tmp/kubeconfig-temp
+                                                export KUBECONFIG=/tmp/kubeconfig-temp
+
+
+                                                set -x
+
+                                                check_variable()
+                                                {
+                                                if [ -z "\${1}" ]
+                                                then
+                                                        printf "\n\n\nERROR:Not able to fetch the value.Please check the issue.Going to exit now."
+                                                        exit 1
+                                                fi
+                                                }
+
+                                                printf "\n===================================== Deployment stage ==========================================\n\n"
+
+                                                CURRENT_DIR=`cat $WORKSPACE/commit_details.txt | grep "^+++" | grep -v "/dev/null" | sed -n '1p' | awk -F"/" '{for(i=2;i<=NF-1;i++){printf \$i"/"}}'| sed s'/.\$//'`
+                                                if [ -z \$CURRENT_DIR ]
+                                                then
+                                                CURRENT_DIR="."
+                                                fi
+                                                echo "CURRENT_DIR=\$CURRENT_DIR"
+
+                                                DEPLOYMENT_FILE_NAME=`grep -i "^[[:space:]]*image:" "\$CURRENT_DIR/"* | grep -v "^#" | head -1 | awk -F":" '{print \$1}' | sed -e 's/\r//g'`
+                                                echo "DEPLOYMENT_FILE_NAME=\$DEPLOYMENT_FILE_NAME"
+
+                                                if [ "\$DEPLOYMENT_FILE_NAME" == '' ]
+                                                then
+                                                           printf "\n\n\nERROR:Deployment file not found.Please ensure the file is present in the directory.Going to exit now."
+                                                            exit 1
+                                                fi
+
+                                                IMAGE_NAME=`cat "\$DEPLOYMENT_FILE_NAME" | grep -i "^[[:space:]]*image:" | grep -v "^#" | head -1 | awk -F":" '{for(i=2;i<=NF;i++){printf \$i}}' | tr -d ' '`
+                                                echo "IMAGE_NAME=\$IMAGE_NAME"
+                                                check_variable "\$IMAGE_NAME"
+
+                                                printf "\n\n------------Checking validity of the image----------------\n\n"
+
+                                                DEPLOYMENT_NAME=`cat "\$DEPLOYMENT_FILE_NAME" | grep "^[[:space:]]*name:" | sed -n '1p' | cut -d':' -f2 | tr -d ' ' | sed -e 's/\r//g'`
+                                                echo "DEPLOYMENT_NAME=\$DEPLOYMENT_NAME"
+                                                check_variable "\$DEPLOYMENT_NAME"
+
+                                                echo "\${DEPLOYMENT_NAME}" > $WORKSPACE/deployment_name
+
+                                                NS_NAME=`cat "\$DEPLOYMENT_FILE_NAME" | grep "^[[:space:]]*namespace: " | cut -d':' -f2 | tr -d ' ' | sed -e 's/\r//g'`
+                                                echo "NS_NAME=\$NS_NAME"
+                                                check_variable "\$NS_NAME"
+
+                                                APP_LABEL=`cat "\$DEPLOYMENT_FILE_NAME" | grep -iE "app: |application: " | grep -v "^#" | sed -n '2p' | awk -F":" '{print \$1}' | tr -d ' ' | sed -e 's/\r//g'`
+                                                echo "APP_LABEL=\$APP_LABEL"
+                                                check_variable "\$APP_LABEL"
+                                                APP_NAME=`cat "\$DEPLOYMENT_FILE_NAME" | grep -iE "app: |application:" | grep -v "^#" | sed -n '2p' | awk -F":" '{print \$2}' | tr -d ' ' | sed -e 's/\r//g'`
+                                                echo "APP_NAME=\$APP_NAME"
+                                                check_variable "\$APP_NAME"
+                                                ENV_LABEL=`cat "\$DEPLOYMENT_FILE_NAME" | grep -iE  "environment:|env:" | grep -v "^#" | sed -n '2p' | awk -F":" '{print \$1}' | tr -d " " | sed -e 's/\r//g'`
+                                                echo "ENV_LABEL=\$ENV_LABEL"
+                                                check_variable "\$ENV_LABEL"
+                                                ENV=`cat "\$DEPLOYMENT_FILE_NAME" | grep -iE  "environment:|env:" | grep -v "^#" | sed -n '2p' | awk -F":" '{print \$2}' | tr -d " " | sed -e 's/\r//g'`
+                                                echo "ENV=\$ENV"
+                                                check_variable "\$ENV"
+
+                                                REPLICAS=`cat "\$DEPLOYMENT_FILE_NAME" | grep "^[[:space:]]*replicas:" | sed -n '1p' | cut -d':' -f2 | tr -d ' ' | sed -e 's/\r//g'`
+                                                echo "REPLICAS=\$REPLICAS"
+                                                check_variable "\$REPLICAS"
+                                                DEPLOYMENT_TYPE=`cat "\$DEPLOYMENT_FILE_NAME" | grep "^[[:space:]]*kind:" | sed -n '1p' | cut -d':' -f2 | tr -d ' ' | sed -e 's/\r//g'`
+                                                echo "DEPLOYMENT_TYPE=\$DEPLOYMENT_TYPE"
+                                                check_variable "\$DEPLOYMENT_TYPE"
+                                                DEPLOY_MESSAGE=`date;echo -n "--";cat $WORKSPACE/commit_details.txt | sed -n '5p'| tr -d ' ' | sed -e 's/\r//g'`
+                                                DEPLOY_MESSAGE=`echo "\$DEPLOY_MESSAGE"| tr -d "\n"`
+                                                echo "MESSAGE=\$DEPLOY_MESSAGE"
+
+                                                HPA_FILE_NAME=`grep "kind: HorizontalPodAutoscaler" "\$CURRENT_DIR/"* | head -1 | awk -F":" '{print \$1}' | sed -e 's/\r//g'`
+                                                echo "HPA_FILE_NAME=\$HPA_FILE_NAME"
+
+                                                MIN_HPA=`cat "\$HPA_FILE_NAME" | grep "^[[:space:]]*minReplicas: " | sed -n '1p' | cut -d':' -f2 | tr -d ' ' | sed -e 's/\r//g'`
+                                                echo "MIN_HPA=\$MIN_HPA"
+
+
+
+                        check_pods_status()
+                        {
+
+                                echo -n "\n\n\n\n----------------------check_pods_status---------------------------------------\n\n"
+
+                                echo "INITIAL_POD_COUNT=\$INITIAL_POD_COUNT"
+
+                                if [ "\${1}" == 'Ingress' -o "\${1}" == 'Service' -o "\${1}" == 'ServiceAccount' -o "\${1}" == 'NetworkPolicy' ]
+                                then
+
+                                                echo "FILE KIND: \${1}"
+                                                echo "There will not be any changes in the pods."
+
+                                elif [ "\${1}" == 'ConfigMap' -a "\$INITIAL_POD_COUNT" == 0 ]
+                                then
+                                                echo "FILE KIND: \${1}"
+                                                echo "No Previous pods found.There will not be any changes in the pods."
+
+                                elif [ "\${1}" == 'HorizontalPodAutoscaler' -a "\$INITIAL_POD_COUNT" == 0 ]
+                                then
+                                                echo "FILE KIND: \${1}"
+                                                echo "No Previous pods found.There will not be any changes in the pods."
+
+                                else
+
+                                                sleep 60
+                                                a=0
+                                                while [ "\$a" -lt 26 ]
+                                                do
+
+                                                        echo "\$a"
+                                                        >$WORKSPACE/running_pods.txt
+                                                        kubectl get po -l "\$APP_LABEL=\$APP_NAME","\$ENV_LABEL=\$ENV" -n "\$NS_NAME" | sed -n '2,\$p' >$WORKSPACE/running_pods.txt
+
+                                                        echo "--------------Running pods------------------"
+                                                        cat $WORKSPACE/running_pods.txt
+
+                                                        cat $WORKSPACE/running_pods.txt | grep -v "Terminating" | awk '{print \$1}' | tr -d '^\$' | sort >$WORKSPACE/new_pods_sorted.txt
+                                                        echo "--------------Previous pods------------------"
+                                                        cat $WORKSPACE/previous_pods_sorted.txt
+
+
+
+                                                        PREVIOUS_POD_COUNT=`cat $WORKSPACE/previous_pods_sorted.txt | wc -l | tr -d ' '`
+                                                        echo "PREVIOUS_POD_COUNT=\$PREVIOUS_POD_COUNT"
+
+
+                                                        echo "--------------New pods------------------"
+                                                        cat $WORKSPACE/new_pods_sorted.txt
+                                                        NEW_POD_COUNT=`cat $WORKSPACE/new_pods_sorted.txt | wc -l | tr -d ' '`
+                                                        echo "NEW_POD_COUNT=\$NEW_POD_COUNT"
+
+                                                        if [ "\$NEW_POD_COUNT" == 0 ]
+                                                        then
+                                                                echo "No Pods found.Please check the issue.Going to move ahead now."
+                                                                break
+                                                        fi
+
+
+                                                        comm -12 $WORKSPACE/previous_pods_sorted.txt $WORKSPACE/new_pods_sorted.txt > $WORKSPACE/common_pods.txt
+                                                        echo "--------------Common pods------------------"
+                                                        cat $WORKSPACE/common_pods.txt
+                                                        COMMON_POD_COUNT=`cat $WORKSPACE/common_pods.txt | wc -l | tr -d ' '`
+                                                        echo "COMMON_POD_COUNT=\$COMMON_POD_COUNT"
+
+                                                        num=`cat $WORKSPACE/running_pods.txt | awk '{print \$2}'| awk -F"/" '{print \$1}' | sort | head -1 | tr -d ' ' | sed -e 's/\r//g'`
+                                                        echo "num=\$num"
+
+                                                        den=`cat $WORKSPACE/running_pods.txt | awk '{print \$2}'| awk -F"/" '{print \$2}' | sort -r | head -1 | tr -d ' ' | sed -e 's/\r//g'`
+                                                        echo "den=\$den"
+
+                                                        str=`cat $WORKSPACE/running_pods.txt | grep -i "Terminating" | head -1 | awk '{print \$3}' | tr -d ' ' | sed -e 's/\r//g'`
+                                                        echo "str=\$str"
+
+                                                        if [ "\$num" == '' -o "\$den" == '' ]
+                                                        then
+                                                                printf "\n\n\nERROR:Not able to fetch pods status.There is some issue, Please check.Going to exit now."
+                                                                exit 1
+                                                        fi
+
+                                                        if [ "\$num" -lt "\$den" -o ! -z "\$str" ]
+                                                        then
+
+                                                                printf "\nSTILL THERE ARE SOME PENDING PODS."
+                                                                echo "------------------------------------------"
+                                                                cat $WORKSPACE/running_pods.txt
+                                                                echo "------------------------------------------"
+
+                                                        elif [ -s $WORKSPACE/common_pods.txt ]
+                                                        then
+
+                                                                        echo "FEW OLD PODS FOUND.Checking further."
+
+                                                                        if [ "\${1}" == 'HorizontalPodAutoscaler' -a "\$NEW_POD_COUNT" -ge "\$MIN_HPA" ]
+                                                                        then
+                                                                                echo "HPA File was mofified.Below are the current pods now."
+                                                                                kubectl get po -l "\$APP_LABEL=\$APP_NAME","\$ENV_LABEL=\$ENV" -n "\$NS_NAME"
+                                                                                break
+                                                                        else
+                                                                                printf "\n\n\n------------------------------------------\n\n\n"
+                                                                                kubectl get po -l "\$APP_LABEL=\$APP_NAME","\$ENV_LABEL=\$ENV" -n "\$NS_NAME"
+                                                                                printf "\n\n\nERROR:Still OLD POD(S) running.Please check if there was any change in the committed files. If the files have been applied successfully then probably engouh resources are not there to bring the new pods up. Please check.Going to exit now.\n\n\n"
+                                                                                exit 1
+                                                                        fi
+
+                                                        else
+                                                                        printf "\n\n\n------------------------------------------\n\n\n"
+                                                                        kubectl get po -l "\$APP_LABEL=\$APP_NAME","\$ENV_LABEL=\$ENV" -n "\$NS_NAME"
+                                                                        printf "\n\n\nNo Pending pods now.No Old Pods.Deployment looks Good....! Going to proceed ahead.\n\n\n"
+                                                                        break
+
+                                                        fi
+
+                                                                sleep 80
+                                                                a=`expr \$a + 1`
+                                                done
+
+
+                                                if [ "\$a" -ge 26 ]
+                                                then
+                                                        printf "\n\n\nERROR:MAX NO. OF CHECKS EXCEEDED.THERE ARE STILL SOME PENDING PODS.PLEASE CHECK GOING TO EXIT NOW."
+                                                        exit 1
+                                                fi
+
+                                fi
+
+                        }
+
+                                                restart_statefulset()
+                                                {
+                                                        b=0
+                                                        echo "REPLICAS=\$REPLICAS"
+                                                        while [ "\$b" -lt "\$REPLICAS" ]
+                                                        do
+                                                        echo "b=\$b"
+                                                        kubectl get pod "\${DEPLOYMENT_NAME}-\${b}" -n "\$NS_NAME"
+                                                        kubectl delete pod "\${DEPLOYMENT_NAME}-\${b}" -n "\$NS_NAME"
+                                                        check_pods_status "NULL"
+                                                        b=`expr \$b + 1`
+                                                        done
+
+                                                }
+
+                                                check_statefulset()
+                                                {
+
+                                                if [ "\${1}" == 'StatefulSet' ]
+                                                then
+                                                                echo "STATEFULSET found."
+                                                                echo "Going to start pods in ROLLOUT manner."
+                                                                restart_statefulset
+                                                else
+                                                                echo "STATEFULSET NOT found."
+
+                                                fi
+                                                }
+
+                                                pod_restart()
+                                                {
+
+                                                if [ "\$DEPLOYMENT_TYPE" == 'StatefulSet' ]
+                                                then
+                                                                echo "STATEFULSET found."
+                                                                echo "Going to start pods in ROLLOUT manner."
+                                                                restart_statefulset
+
+                                                elif [ "\$DEPLOYMENT_TYPE" == 'Deployment' ]
+                                                then
+                                                                echo "Deployment found."
+                                                                echo "Deployment rollout history."
+                                                                echo "Going to start pods in ROLLOUT manner."
+                                                                RESTART_STATUS=`kubectl rollout restart deployment/"\$DEPLOYMENT_NAME" -n "\$NS_NAME" | awk '{print \$1}' | tr -d ' '`
+                                                                echo "RESTART_STATUS=\$RESTART_STATUS"
+                                                                sleep 45
+
+                                                else
+                                                                echo "No restart required."
+                                                fi
+
+                                                }
+
+                                                update_rollout_history()
+                                                {
+                                                if [ "\$DEPLOYMENT_TYPE" == 'Deployment' -a "\${1}" == 'Deployment' ]
+                                                then
+                                                                echo "Deployment file found.Going to update rollout history."
+                                                                echo "----------------------Before---------------------------------"
+
+                                                                kubectl annotate deployment "\$DEPLOYMENT_NAME" kubernetes.io/change-cause="\$DEPLOY_MESSAGE" --record=false --overwrite=false  -n "\$NS_NAME"
+                                                                echo "----------------------After---------------------------------"
+                                                                kubectl rollout history deployment "\$DEPLOYMENT_NAME" -n "\$NS_NAME"
+
+                                                else
+                                                                echo "No need to update rollout history."
+                                                fi
+                                                }
+
+
+
+                                                check_configmap()
+                                                {
+                                                echo "------------CHECKING EXISTENCE OF CONFIGMAP ------------"
+
+                                                echo "INITIAL_POD_COUNT=\$INITIAL_POD_COUNT"
+
+                                                if [ "\${1}" == 'ConfigMap' ]
+                                                then
+                                                echo "CONFIGMAP file found."
+
+                                                                if [ "\$STATUS" == "unchanged" ]
+                                                                then
+                                                                        echo "STATUS IS NOT CHANGED.Will NOT restart pods."
+
+                                                                elif [ "\$INITIAL_POD_COUNT" -gt 0 ]
+                                                                then
+                                                                        pod_restart
+
+                                                                else
+                                                                        echo "Pod restart not required."
+                                                                fi
+
+                                                else
+                                                echo "CONFIGMAP file NOT found."
+                                                fi
+
+                                                }
+
+
+                        kube_apply()
+                                {
+
+                                                printf "\nI am inside kube_apply function."
+                                                printf "\nFILENAME=\${1}"
+
+                                                file_kind=`cat "\${1}" | grep "kind: " | sed -n '1p' | awk -F": " '{print \$2}' | tr -d ' ' | sed -e 's/\r//g'`
+                                                echo "file_kind=\$file_kind"
+
+                                                STATUS=`kubectl apply -f "\${1}" -n "\$NS_NAME" | awk -F" " '{print \$2}' | sed -e 's/\r//g'`
+                                                printf "\nSTATUS=\$STATUS"
+
+                                                if [ "\$STATUS" == "created" -o "\$STATUS" == "configured" ]
+                                                then
+                                                                update_rollout_history "\$file_kind"
+                                                                check_statefulset "\$file_kind"
+                                                                check_configmap "\$file_kind"
+                                                                check_pods_status "\$file_kind"
+
+                                                elif [ "\$STATUS" == "unchanged" ]
+                                                then
+                                                                printf "\${1} -> Unchanged\n"
+                                                                echo "There is no change in the status.Below are the running pods."
+                                                                echo "-------------------------------------------------------------------"
+                                                                kubectl get po -l "\$APP_LABEL=\$APP_NAME","\$ENV_LABEL=\$ENV" -n "\$NS_NAME"
+                                                else
+                                                                printf "\n\n\nERROR:There is some issue while applying \${1} File.Please check, Going to exit now."
+                                                                exit 1
+
+                                                fi
+
+                        }
+
+
+                        xml_apply()
+                        {
+                                        printf "I am inside xml_apply function.\n"
+                                        xml_file_name=`echo "\${1}" | awk -F"/" '{print \$NF}' | tr -d ' '`
+
+                                if [ "\${xml_file_name}" == "SecurityIdentities.xml" ]
+                                then
+                                                echo "SecurityIdentities.xml FILE FOUND."
+
+                                                SECRET_NAME=`cat "\$DEPLOYMENT_FILE_NAME" | grep "security-identities" | grep "^[[:space:]]*name: " | tr -d ' ' | awk -F":" '{print \$2}' | sed -e 's/\r//g'`
+                                                echo "SECRET_NAME=\$SECRET_NAME"
+
+                                                GET_SECRET_COUNT=`kubectl get secret -n "\$NS_NAME" | grep -w "\$SECRET_NAME" | wc -l | tr -d ' ' | sed -e 's/\r//g'`
+
+                                                                                                if [ "\$GET_SECRET_COUNT" -eq 0 ]
+                                                then
+                                                            printf  "SECRET WAS NOT CREATED INITIALLY.NO NEED TO DELETE ANY PREVIOUS SECRET.WILL MOVE AHEAD WITH NEW SECRET CREATION."
+                                                else
+                                                                                                                        kubectl get secret "\$SECRET_NAME" -n "\$NS_NAME"
+                                                                                                                        SECRET_DELETE_STATUS=`kubectl delete secret "\$SECRET_NAME" -n "\$NS_NAME" | awk '{print \$NF}'`
+                                                                                                                        if [ "\$SECRET_DELETE_STATUS" == "deleted" ]
+                                                                                                                        then
+                                                                printf  "\$SECRET_NAME DELETE SUCCESSFULLY."
+                                                                                                                        else
+                                                                printf "\n\n\nERROR:There is some issue while deleting SECRET FILE, Going to exit now."
+                                                                exit 1
+                                                                                                                        fi
+                                                fi
+
+
+
+                                                SECRET_CREATE_STATUS=`kubectl create secret generic "\$SECRET_NAME" --from-file="\${1}" -n "\$NS_NAME" | awk '{print \$NF}' | sed -e 's/\r//g'`
+                                                if [ "\$SECRET_CREATE_STATUS" == "created" ]
+                                                then
+                                                                printf  "\$SECRET_NAME CREATED SUCCESSFULLY.\n"
+                                                                pod_restart
+                                                                check_pods_status "NULL"
+
+                                                elif [ "\$SECRET_CREATE_STATUS" == "exists" ]
+                                                then
+                                                                printf  "\$SECRET_NAME ALREADY EXISTS.\n"
+                                                                kubectl get secret "\$SECRET_NAME" -n "\$NS_NAME"
+                                                else
+                                                                printf "\n\n\nERROR:There is some issue while creating SECRET through FILE.Going to exit now."
+                                                                exit 1
+                                                fi
+
+
+                                fi
+
+                        }
+
+                                                if [ -s $WORKSPACE/yaml_file_list.txt ]
+                                                then
+
+
+                                                        printf "There are few YAML Files.Going to deploy updated files one by one.\n"
+                                                        cat -n $WORKSPACE/yaml_file_list.txt
+
+                                                        for i in `cat $WORKSPACE/yaml_file_list.txt`
+                                                        do
+
+                                                                >$WORKSPACE/previous_pods.txt
+                                                                kubectl get po -l "\$APP_LABEL=\$APP_NAME","\$ENV_LABEL=\$ENV" -n "\$NS_NAME" | sed -n '2,\$p' | awk '{print \$1}' | tr -d '^\$' >$WORKSPACE/previous_pods.txt
+
+                                                                INITIAL_POD_COUNT=`cat $WORKSPACE/previous_pods.txt | wc -l | tr -d ' '`
+                                                                echo "INITIAL_POD_COUNT=\$INITIAL_POD_COUNT"
+
+                                                                cat $WORKSPACE/previous_pods.txt | sort > $WORKSPACE/previous_pods_sorted.txt
+
+                                                                printf "\nFile name: \$i"
+                                                                kube_apply "\$i"
+                                                        done
+
+                                                else
+                                                echo "No YAML Files have been updated in recent commit."
+                                                fi
+
+
+                                                if [ -s $WORKSPACE/xml_files_list.txt ]
+                                                then
+
+                                                        printf "There are few XML Files.Going to deploy updated files one by one.\n"
+                                                        cat -n $WORKSPACE/xml_files_list.txt
+
+                                                        for j in `cat $WORKSPACE/xml_files_list.txt`
+                                                        do
+
+                                                                >$WORKSPACE/previous_pods.txt
+                                                                kubectl get po -l "\$APP_LABEL=\$APP_NAME","\$ENV_LABEL=\$ENV" -n "\$NS_NAME" | sed -n '2,\$p' | awk '{print \$1}' | tr -d '^\$' >$WORKSPACE/previous_pods.txt
+                                                                cat $WORKSPACE/previous_pods.txt | sort > $WORKSPACE/previous_pods_sorted.txt
+
+                                                                printf "\nFile name: \$j"
+                                                                xml_apply "\$j"
+                                                        done
+
+                                                else
+                                                echo "No XML Files have been updated in recent commit."
+                                                fi
+
+                                                """
+
+                                                } catch (Exception err) {
+                                                                currentBuild.result = 'FAILURE'
+                                                                throw err       }
+
+                                        }//script
+                                } //withCredentials
+                }   //container
+            } //steps
+        } //stage
+
+/*----------Deployment Stage Ends-----------*/
+                stage('PostDeploymentTest')
+                {
+
+    agent {label  "${AGENT_LABEL}"}
+
+                        steps
+                        {
+                        container('jmeter')
+                                {
+
+                                        script {
+                        try {
+							
+                             //checkout changelog: false, poll: false, scm: [$class: 'GitSCM', branches: [[name: 'refs/heads/$MY_BRANCH_NAME']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: "$GITHUB_CREDENTIAL_ID", url: 'https://github.vodafone.com/$GITHUB_ORGANIZATION_NAME/$REPO_NAME']]]
+
+                                if ("$EXECUTE_POST_DEPLOYMENT_TEST" == 'true')
+                                {
+
+                                 sh label: '', script: 'pwd'
+                                 sh label: '', script: 'ls -lrt'
+								
+								echo "Fetching .jmx content..."
+								//echo "jmeter_file_data=$jmeter_file_data"
+								writeFile file: "$WORKSPACE/temp-jmeter-script.jmx", text: "${jmeter_file_data}"	
+								 
+
+                                        sh """
+                                                echo "===================================== Post-Deployment-Test stage =========================================="
+                                                echo "POST-DEPLOYMENT TEST IS ENABLED.WILL EXECUTE TEST CASES NOW."
+                                                set -x
+                                        pwd
+                                        ls -lrt
+										
+										JMETER_FILE_COUNT=`find . -name "temp-jmeter-script.jmx" | wc -l | tr -d ' '`
+
+										if [ "\$JMETER_FILE_COUNT" -eq 1 ]
+                                        then
+												printf "\nONE jmx FILE FOUND."
+												echo "------------------------------------------"
+												find . -name "temp-jmeter-script.jmx"
+												echo "------------------------------------------"
+												
+												JMETER_SCRIPT_PATH=`find . -name "temp-jmeter-script.jmx" | tr -d ' ' | sed -e 's/\r//g'`
+												echo "------------------------------------------"
+												
+												if [ ! -s "\$JMETER_SCRIPT_PATH" ]
+                                                then
+                                                printf "\n\n\nERROR:\$JMETER_SCRIPT_NAME file is EMPTY.Going to exit now."
+												exit 1
+                                                fi
+												
+                                                >$WORKSPACE/post_deployment_test_result.jtl
+                                                JMETER_HOME=`which jmeter`
+
+                                                "\$JMETER_HOME" -n -t "\$JMETER_SCRIPT_PATH" -l $WORKSPACE/post_deployment_test_result.jtl | tee -a $WORKSPACE/post_deployment_summary.jtl
+
+												echo "------------------TEST DETAILS------------------------"
+                                                cat $WORKSPACE/post_deployment_test_result.jtl
+                                                echo "------------------------------------------"
+																								
+												
+                                                cat $WORKSPACE/post_deployment_summary.jtl | grep "summary =" | tail -1
+                                                cat $WORKSPACE/post_deployment_summary.jtl | grep "summary =" | tail -1 | awk -F"Err:" '{print \$2}' | awk -F"(" '{print \$2}' | awk -F"%)" '{print \$1}' >$WORKSPACE/post_deployment_perc
+                                                cat $WORKSPACE/post_deployment_perc
+													
+
+                                        elif [ "\$JMETER_FILE_COUNT" -gt 1 ]
+                                        then
+
+												printf "\n\n\nERROR:More than 1 jmeter script found of same name.Going to exit now."
+												
+												echo "------------------------------------------"
+												find . -name "$JMETER_SCRIPT_NAME"
+												echo "------------------------------------------"
+												exit 1
+														
+										else
+												printf "\n\n\nERROR: "$JMETER_SCRIPT_NAME" jmx script file not found.Please check."
+												exit 1
+                                        fi
+										
+
+                                        """
+                                        post_deployment_err_perc =  sh (script: "cat $WORKSPACE/post_deployment_perc", returnStdout: true)trim()
+                                        echo "value=$post_deployment_err_perc"
+										
+										post_deployment_test_result_var = readFile "$WORKSPACE/post_deployment_test_result.jtl"
+                                        echo "post_deployment_test_result_var=$post_deployment_test_result_var"
+	
+										
+                                }
+                                else
+                                {
+                                echo "POST DEPLOYMENT TEST IS DISABLED.WILL MOVE AHEAD WITH NEXT STAGE."
+                                post_deployment_err_perc = "Not Applicable, Test skipped by user."
+                                }
+
+                        } catch (Exception err) {
+                                currentBuild.result = 'FAILURE'
+                                throw err       }
+
+
+                                }       //script
+					 
+						 
+                        } //container
+                }       //steps
+        }       // stage
+
+  } //stages
+/*----------Post notification section-----------*/
+                post {
+
+                        always {
+                                        script {
+                                                echo "******************* END OF JOB *************************************"
+                                                ENV_NAME = sh (script: "cat $WORKSPACE/env_name 2>/dev/null", returnStdout: true)trim()
+                                                echo "ENV_NAME=$ENV_NAME"
+
+                                                MS_DEPLOYMENT_NAME =  sh (script: "cat $WORKSPACE/deployment_name", returnStdout: true)trim()
+                                                echo "MS_DEPLOYMENT_NAME=$MS_DEPLOYMENT_NAME"
+
+                                                //echo "SLACK_CHANNEL=${SLACK_CHANNEL}"
+                                                //echo "SLACK_CRED=${SLACK_CRED}"
+                                                echo "COMMIT_USER1=${COMMIT_USER1}"
+												
+						commitMessage = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+						echo "commitMessage=$commitMessage"
+						
+						changeSummaryMessage =commitMessage.substring(commitMessage.lastIndexOf('-') +1)
+						echo "changeSummaryMessage=$changeSummaryMessage"
+						
+						commitId = sh (script: "git log -n 1 --pretty=format:'%H'", returnStdout: true).trim()
+						echo "commitId=$commitId"
+												
+												
+						
+												echo "---------------------------var to file---------------------------"
+										
+									if ("$EXECUTE_PRE_DEPLOYMENT_TEST" == 'true')
+                                       {
+											echo "pre-deployment-test-data"
+											echo "pre_deployment_test_result_var=$pre_deployment_test_result_var"
+											echo "------------------------pre deployment test var to file-----------------"
+											writeFile file: "$WORKSPACE/pre_deployment_test_result.csv", text: "${pre_deployment_test_result_var}"
+											
+										}
+										
+									if ("$EXECUTE_POST_DEPLOYMENT_TEST" == 'true')
+                                        {
+											echo "post-deployment-test-data"
+											echo "post_deployment_test_result_var=$post_deployment_test_result_var"
+											echo "------------------------post deployment test var to file-----------------"
+											writeFile file: "$WORKSPACE/post_deployment_test_result.csv", text: "${post_deployment_test_result_var}"
+											
+										}
+																																
+                                                emailext(
+												attachLog: false,
+												attachmentsPattern: "**/*.csv",
+												body: "Hi Team, <br/><br/> This is auto generated email.Please do not reply to this.<br><br>${env.JOB_NAME} # ${env.BUILD_NUMBER} <br>Activity: Deployment <br>MS: ${REPO_NAME}/${MS_DEPLOYMENT_NAME} <br>Status : ${currentBuild.result} <br>Environment: $ENV_NAME <br>Author: ${COMMIT_USER1} <br>Build URL: ${env.BUILD_URL} <br>Pre-deployment error percentage: ${pre_deployment_err_perc} <br>Post-deployment error percentage: ${post_deployment_err_perc}",
+												subject: "${REPO_NAME}/${MS_DEPLOYMENT_NAME} Deployment Status",
+												to: EMAIL_LIST
+												)
+
+
+
+                                        if( ENV_NAME == "prod" )
+                                             {
+												echo "THIS IS SLACK SECTION."
+																						
+
+												if( GITHUB_ORGANIZATION_NAME == "vfgroup-cps-dxl" || GITHUB_ORGANIZATION_NAME == "VFCPS-GlobalIntegrationGateway" )
+												{												
+													slackSend baseUrl: 'https://hooks.slack.com/services/', channel: "${SLACK_CHANNEL}", teamDomain: 'vf-cps.slack.com', tokenCredentialId: "${SLACK_CRED}",color: 'good', message: "Hi,\nThis is auto generated notification for deployment.\n${env.JOB_NAME}# ${env.BUILD_NUMBER} \n Activity: Deployment \n MS: ${REPO_NAME}/${MS_DEPLOYMENT_NAME} \n Status : ${currentBuild.result} \n Environment: ${ENV_NAME} \n Author: ${COMMIT_USER1} \n Build URL: ${env.BUILD_URL} \n Pre-deployment error percentage: ${pre_deployment_err_perc} \n Post-deployment error percentage: ${post_deployment_err_perc}"
+												}												
+												
+												if( GITHUB_ORGANIZATION_NAME == "VFCPS-DC-DE" )
+												{
+													slackSend baseUrl: 'https://vf-cps.slack.com/services/hooks/jenkins-ci/', channel: "${SLACK_CHANNEL}", teamDomain: 'vf-cps.slack.com', tokenCredentialId: "${SLACK_CRED}",color: 'good', message: "Hi,\nThis is auto generated notification for deployment.\n${env.JOB_NAME}# ${env.BUILD_NUMBER} \n Activity: Deployment \n MS: ${REPO_NAME}/${MS_DEPLOYMENT_NAME} \n Status : ${currentBuild.result} \n Environment: ${ENV_NAME} \n Author: ${COMMIT_USER1} \n Build URL: ${env.BUILD_URL} \n Pre-deployment error percentage: ${pre_deployment_err_perc} \n Post-deployment error percentage: ${post_deployment_err_perc}"
+												}
+												
+                                            }  // if( ENV_NAME == "prod" )  ENDS
+			    if( KUBECONFIG_CRED_ID == "jenkins-dxl-prod-al-public-deployer" || KUBECONFIG_CRED_ID == "jenkins-dxl-prod-ie-deployer-kubeconfig" )
+				  {
+						sh '''
+						     PAGERDUTY_INTEGRATION_KEY="9f152378625c440fc095ff776311e1ef"
+						     PAGERDUTY_API_URL="https://events.pagerduty.com/v2/change/enqueue"
+						     SUMMARY="''' +commitMessage+ '''"
+						     CHANGE_SUMMARY="''' +changeSummaryMessage+ '''"
+						     GIT_COMMIT="''' +commitId+ '''"
+						     MS_DEPLOYMENT_NAME="''' +MS_DEPLOYMENT_NAME+ '''"
+						     ENV_NAME="''' +ENV_NAME+ '''"
+						     CHANGE_PAYLOAD='{
+                                                     "routing_key": "'"$PAGERDUTY_INTEGRATION_KEY"'",
+	                                             "event_action": "trigger",
+                                                         "payload": {
+	                                                  "summary": "'"$SUMMARY"'",
+	                                                  "source": "Jenkins",
+	                                                  "custom_details": {
+		                                                 "Change Summary": "'"$CHANGE_SUMMARY"'",
+		                                                 "Environment": "'"$ENV_NAME"'",
+								                         "Git Commit": "'"$GIT_COMMIT"'",
+                                                         "Organization": "'"${GITHUB_ORGANIZATION_NAME}"'"
+ 
+	                                                          }
+                                                            },
+                                                   "links": [
+                                                            {
+                                                             "href": "'"${BUILD_URL}"'",
+                                                             "text": "Jenkins Job build URL"
+                                                            }
+                                                            ]
+                                                         }'
+                                                  curl -X POST -H "Content-Type: application/json" -d "$CHANGE_PAYLOAD" "$PAGERDUTY_API_URL"
+					          '''		
+                          }  //if( KUBECONFIG_CRED_ID == "jenkins-dxl-prod-al-public-deployer" || KUBECONFIG_CRED_ID == "jenkins-dxl-prod-ie-deployer-kubeconfig" ) ENDS  
+                                                }       //script
+
+                                                deleteDir()
+                                        }  //always
+
+                        }  //post
+
+}  //pipeline
